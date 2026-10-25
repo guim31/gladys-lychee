@@ -30,6 +30,24 @@ Gladys before reporting a problem.
 
 In scope: the code of this repository and the Docker image it publishes.
 
+What the integration keeps and sends:
+
+- The API token, or the user name and password, live in the configuration of
+  the integration in Gladys (the password field is a secret field). They are
+  sent to the Lychee gallery only, in the `Authorization` header or to open a
+  session, never logged and never written under `/data`. The session cookies
+  stay in memory.
+- `/data` holds `lychee-state.json`: the address of the gallery and the user
+  id of the account, the upload date of the last photo seen (and the ids of
+  the photos uploaded in that second), and the photo count of each album. No
+  photo, no name, no secret.
+- Network: only the configured Lychee gallery. Thumbnails are read only when
+  the widget setting asks for them, for the photos the widget lists, and served
+  to Gladys through its widget image proxy.
+- The integration only reads: it never changes, uploads or deletes anything in
+  Lychee.
+
 Out of scope: Gladys Assistant itself (see its
 [security policy](https://github.com/GladysAssistant/Gladys/security/policy)),
-and the third-party services and devices the integration talks to.
+and Lychee itself (see its
+[security policy](https://github.com/LycheeOrg/Lychee/security/policy)).

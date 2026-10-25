@@ -1,0 +1,4 @@
+{
+  "message": "Session expired",
+  "exception": "SessionExpiredException"
+}

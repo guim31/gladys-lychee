@@ -1,0 +1,9 @@
+{
+  "id": 1,
+  "has_token": true,
+  "username": "admin",
+  "email": null,
+  "is_ldap": false,
+  "may_administrate": true,
+  "shared_albums_visibility": "default"
+}
