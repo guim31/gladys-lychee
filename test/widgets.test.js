@@ -57,8 +57,8 @@ test('the gallery: counters and the last photos, without thumbnails', async (t) 
   assert.equal(list.items.length, 4);
   assert.deepEqual(list.items[0], {
     title: 'p3.jpg',
-    subtitle: '25 oct. 2026',
-    description: 'p3.jpg\nAjoutée le 25 oct. 2026, 16:07',
+    subtitle: 'Plage · 25 oct. 2026',
+    description: 'p3.jpg\nPlage\nAjoutée le 25 oct. 2026, 16:07',
   });
   assert.ok(
     list.items.every((item) => item.image === undefined),

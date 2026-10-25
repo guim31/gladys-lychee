@@ -68,7 +68,7 @@ test('publishes the counters of the real gallery at the first reading', async (t
   assert.equal(state(w, 'albums'), 2);
   assert.equal(state(w, 'users'), 2);
   // The last upload, although Lychee sorts "Recent" by another order.
-  assert.equal(state(w, 'latest'), 'p3.jpg · Oct 25, 2026');
+  assert.equal(state(w, 'latest'), 'p3.jpg · Plage · Oct 25, 2026');
   assert.deepEqual(w.fake.sceneEvents, [], 'the first reading announces nothing');
 });
 
@@ -299,8 +299,11 @@ test('refused credentials, a wrong address, a gallery that stops answering', asy
   );
   assert.deepEqual(wrong.fake.discoveredDevices, [], 'no device before a first reading');
   await wrong.hub.refresh();
-  assert.equal(wrong.server.logins, 2, 'a failed login leaves no guest session behind');
+  assert.equal(wrong.server.logins, 1, 'no new attempt for 15 minutes (10 logins an hour)');
   assert.match(wrong.fake.connectionStatus.message.en, /user name or password refused/);
+  wrong.clock.advance(15 * 60_000);
+  await wrong.hub.refresh();
+  assert.equal(wrong.server.logins, 2, 'a failed login leaves no guest session behind');
 
   const token = await world(t, { config: { ...CONFIG, password: 'nope' } });
   assert.match(token.fake.connectionStatus.message.en, /API token, user name or password refused/);
@@ -462,4 +465,49 @@ test('a reverse proxy answering 503 means the gallery does not answer', async (t
   server.answer = () => ({ status: 503, headers: {}, body: '<html>503</html>' });
   const w = await world(t, { server });
   assert.match(w.fake.connectionStatus.message.en, /the gallery does not answer/);
+});
+
+test('a session logged out by Lychee logs in again', async (t) => {
+  const w = await world(t, {
+    config: { server_url: SERVER_URL, username: 'admin', password: 'secret-1' },
+  });
+  for (const session of w.server.sessions.values()) {
+    session.user = null; // password changed elsewhere: the cookies stay valid
+  }
+  await w.hub.refresh();
+  assert.equal(w.server.logins, 2);
+  assert.equal(w.fake.connectionStatus.connected, true);
+});
+
+test('a scene action during a login waits for it', async (t) => {
+  const w = await world(t, {
+    connect: false,
+    config: { server_url: SERVER_URL, username: 'admin', password: 'secret-1' },
+  });
+  await w.gladys.connect();
+  await w.app.ready;
+  w.server.forgetSessions();
+  const [reading, ack] = await Promise.all([
+    w.hub.refresh(),
+    w.fake.sceneAction('get_latest_photos', {}),
+  ]);
+  assert.equal(reading, undefined);
+  assert.equal(ack.success, true, ack.error);
+  assert.equal(w.server.logins, 2, 'one login for both');
+});
+
+test('a big followed album is read page by page, and again only when it grows', async (t) => {
+  const server = new FakeLychee({ perPage: 2 });
+  for (let n = 1; n <= 5; n += 1) {
+    server.add(photo(n, { album: PLAGE, at: ADDED_AT - n * 60_000, title: `a${n}` }));
+  }
+  const w = await world(t, { server, config: { ...CONFIG, albums: 'Plage' } });
+  // Sorted by title, the newest upload ("a1") is not on page 1.
+  assert.equal(w.hub.albumRecent(w.hub.followed[0])[0].name, 'a1');
+  const reads = () =>
+    w.server.requests.filter((r) => r.route === 'Album::photos' && r.body === undefined).length;
+  const before = reads();
+  await w.hub.refresh();
+  const recentPages = 5; // "Recent": 9 photos, 2 a page
+  assert.equal(reads() - before, recentPages, 'the album was not read again');
 });

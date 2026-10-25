@@ -64,8 +64,11 @@ export const TRIGGERS = Object.freeze({
 });
 
 export const HUB_TIMINGS = {
-  // Pages of photos read at most per album (Lychee pages hold 500 by default).
-  maxPages: 4,
+  // Pages of photos read at most per album (Lychee pages hold 100 to 500
+  // photos, sorted by its setting, not by upload date: every page is read).
+  maxPages: 20,
+  // Admin/Stats is counted again (force) at most this often, cached otherwise.
+  statsForceMs: 60 * 60_000,
   // Albums of the tree read at most.
   maxAlbums: 300,
   // Followed albums read at most (one more request each).
@@ -204,6 +207,7 @@ export class LycheeHub {
             username: config.username,
             password: config.password,
             request: this.request,
+            now: this.now,
           })
         : null;
     }
@@ -290,20 +294,27 @@ export class LycheeHub {
     let changed;
     try {
       const status = parseUser(await client.user());
+      const albums = await this.readAlbums(client);
+      const recent = await this.readPhotos(client, RECENT);
       const stats = status.admin
-        ? await client.stats().then(parseStats, (err) => {
+        ? await client.stats(this.forceStats(recent)).then(parseStats, (err) => {
             if (![ERROR_KINDS.HTTP, ERROR_KINDS.RIGHTS].includes(err.kind)) {
               throw err;
             }
             return parseStats(null);
           })
         : parseStats(null);
-      const albums = await this.readAlbums(client);
-      const recent = await this.readPhotos(client, RECENT);
       const { matched } = matchAlbums(this.config.albums, albums);
       const albumPhotos = new Map();
       for (const album of matched.slice(0, this.timings.maxFollowed)) {
-        albumPhotos.set(album.id, await this.readPhotos(client, album.id, 1));
+        // Read again only when its count changed: every page of a big album is read.
+        const known = this.albumPhotos.get(album.id);
+        albumPhotos.set(
+          album.id,
+          known && known.count === album.photos
+            ? known
+            : Object.assign(await this.readPhotos(client, album.id), { count: album.photos }),
+        );
       }
       if (client !== this.client) {
         return; // reconfigured meanwhile: this reading is dropped
@@ -329,8 +340,8 @@ export class LycheeHub {
       this.recent = recent.slice(0, this.timings.shownCount);
       this.followAlbums();
       const fresh = this.freshPhotos(recent, saved);
-      if (fresh.length > 0) {
-        await this.learnAlbum(client, fresh[0]);
+      if (recent[0]) {
+        await this.learnAlbum(client, recent[0]);
       }
       this.snapshot = {
         photos: stats.photos ?? albums.reduce((sum, album) => sum + album.photos, 0),
@@ -345,8 +356,8 @@ export class LycheeHub {
       if (client !== this.client) {
         return;
       }
-      await this.announcePhotos(fresh);
-      await this.announceAlbums(albums, saved);
+      await this.announcePhotos(client, fresh);
+      await this.announceAlbums(client, albums, saved);
       await this.publishStates();
       changed = wasReachable !== true || before !== this.widgetKey();
     } catch (err) {
@@ -406,6 +417,25 @@ export class LycheeHub {
     return photos.sort(byAddition);
   }
 
+  /**
+   * Whether this reading counts the figures of Lychee again, instead of its
+   * cache: after new uploads, else at most hourly (a recount is heavy).
+   */
+  forceStats(recent) {
+    const now = this.now();
+    const { lastAt } = this.saved;
+    const uploaded = lastAt !== null && recent.some((photo) => photo.addedAt > lastAt);
+    if (
+      !uploaded &&
+      this.statsForcedAt !== undefined &&
+      now - this.statsForcedAt < this.timings.statsForceMs
+    ) {
+      return false;
+    }
+    this.statsForcedAt = now;
+    return true;
+  }
+
   /** What the widget shows of the gallery: it is refreshed when this changes. */
   widgetKey() {
     return JSON.stringify([
@@ -436,7 +466,7 @@ export class LycheeHub {
   /** The name of the album of a photo, null when unknown. */
   albumName(photo) {
     if (this.photoAlbum.has(photo.id)) {
-      return this.photoAlbum.get(photo.id).name;
+      return this.photoAlbum.get(photo.id)?.name ?? null;
     }
     for (const [id, photos] of this.albumPhotos) {
       if (photos.some((item) => item.id === photo.id)) {
@@ -446,16 +476,21 @@ export class LycheeHub {
     return null;
   }
 
-  /** "Recent" does not tell the album of a photo: ask Lychee (one request). */
+  /** "Recent" does not tell the album of a photo: ask Lychee once (one request). */
   async learnAlbum(client, photo) {
+    if (this.photoAlbum.has(photo.id)) {
+      return;
+    }
     try {
       const list = await client.photoAlbums(photo.id);
       const first = Array.isArray(list)
         ? list.find((item) => typeof item?.title === 'string')
         : null;
-      if (first) {
-        this.photoAlbum.set(photo.id, { id: String(first.id), name: first.title.trim() });
-      }
+      // null: an unsorted photo, asked once.
+      this.photoAlbum.set(
+        photo.id,
+        first ? { id: String(first.id), name: first.title.trim() } : null,
+      );
     } catch (err) {
       logger.debug(`Album of photo ${photo.id} unknown: ${err.message}`);
     }
@@ -507,7 +542,7 @@ export class LycheeHub {
   }
 
   /** Announce the photos uploaded since the previous reading. */
-  async announcePhotos(fresh) {
+  async announcePhotos(client, fresh) {
     if (fresh.length === 0) {
       return;
     }
@@ -518,7 +553,7 @@ export class LycheeHub {
       name: latest.name,
       album: this.albumName(latest) ?? '',
       added_at: stamp(latest.addedAt),
-      url: this.client.pageUrl(this.photoAlbum.get(latest.id)?.id ?? RECENT, latest.id),
+      url: client.pageUrl(this.photoAlbum.get(latest.id)?.id ?? RECENT, latest.id),
     });
   }
 
@@ -527,7 +562,7 @@ export class LycheeHub {
    * album seen for the first time after the first reading counts from zero
    * (a new album). Albums no longer seen keep their count.
    */
-  async announceAlbums(albums, saved) {
+  async announceAlbums(client, albums, saved) {
     const previous = saved.albums;
     const current = { ...previous };
     const grown = [];
@@ -557,7 +592,7 @@ export class LycheeHub {
           path: album.path,
           count: added,
           total: album.photos,
-          url: this.client.pageUrl(album.id),
+          url: client.pageUrl(album.id),
         },
       );
     }
@@ -802,7 +837,7 @@ export class LycheeHub {
       }
       const photos = await this.readPhotos(client, album ? album.id : RECENT);
       const [last] = photos;
-      if (last && !album && !this.photoAlbum.has(last.id)) {
+      if (last && !album) {
         await this.learnAlbum(client, last);
       }
       const now = this.now();

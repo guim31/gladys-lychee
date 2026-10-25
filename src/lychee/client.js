@@ -17,7 +17,7 @@
 // - a refused token is an HTTP 400 `Invalid token`, a refused password an
 //   HTTP 401. `Auth::login` allows 10 logins an hour, successful ones
 //   included (HTTP 429 beyond): the session is kept, never opened per read;
-// - `Admin/Stats` answers figures cached by Lychee: `force=1` counts again;
+// - `Admin/Stats` answers figures cached by Lychee: `force=1` counts again
 // - the "Recent" smart album needs the upload right (or an administrator):
 //   HTTP 403 `Insufficient privileges` otherwise. `Admin/Stats` is for
 //   administrators only;
@@ -74,6 +74,10 @@ export const ID = /^[A-Za-z0-9_-]{24}$/;
 // Smart album of the photos uploaded in the last days (setting `recent_age`).
 export const RECENT = 'recent';
 
+// After a refused login, no new attempt with the same credentials for this
+// long: each attempt counts towards the 10 logins an hour Lychee allows.
+export const LOGIN_PAUSE_MS = Object.freeze({ auth: 15 * 60_000, throttled: 60 * 60_000 });
+
 export class LycheeClient {
   /**
    * @param {object} options
@@ -81,8 +85,9 @@ export class LycheeClient {
    * @param {string|null} [options.username]
    * @param {string} options.password API token, or the password of `username`
    * @param {Function} [options.request] HTTP seam (src/lychee/http.js)
+   * @param {() => number} [options.now]
    */
-  constructor({ url, username = null, password, request = httpRequest }) {
+  constructor({ url, username = null, password, request = httpRequest, now = Date.now }) {
     this.url = url;
     this.username = username;
     this.password = password;
@@ -91,6 +96,9 @@ export class LycheeClient {
     /** Session cookies, by name. */
     this.cookies = new Map();
     this.login = null;
+    this.now = now;
+    /** The last refused login and until when it stands: `{ error, until }`. */
+    this.refused = null;
   }
 
   headers() {
@@ -129,6 +137,10 @@ export class LycheeClient {
 
   /** One API call; resolves the JSON answer (null for an empty one). */
   async call(path, { method = 'GET', json } = {}) {
+    if (this.login) {
+      // A login in progress: its guest cookies are not a session yet.
+      await this.login;
+    }
     if (this.mode === AUTH_MODES.SESSION && this.cookies.size === 0) {
       await this.openSession();
     }
@@ -156,6 +168,9 @@ export class LycheeClient {
 
   /** Open a session with the user name and password (once for concurrent calls). */
   async openSession() {
+    if (this.refused && this.now() < this.refused.until) {
+      throw this.refused.error;
+    }
     this.login ??= (async () => {
       this.cookies.clear();
       // A web page of Lychee sets the CSRF cookie the API wants.
@@ -177,9 +192,16 @@ export class LycheeClient {
       });
       decode(answer, 'Auth::login');
     })()
+      .then(() => {
+        this.refused = null;
+      })
       .catch((err) => {
         // A guest session must not pass for a logged-in one at the next call.
         this.cookies.clear();
+        const pause = LOGIN_PAUSE_MS[err.kind];
+        if (pause) {
+          this.refused = { error: err, until: this.now() + pause };
+        }
         throw err;
       })
       .finally(() => {
@@ -190,17 +212,25 @@ export class LycheeClient {
 
   /** The account Lychee sees: `{ id, username, may_administrate }`. */
   async user() {
-    const user = await this.call('Auth::user');
-    if (!user || typeof user !== 'object' || typeof user.username !== 'string') {
+    let user = await this.call('Auth::user');
+    if (this.mode === AUTH_MODES.SESSION && !isUser(user)) {
+      // Logged out by Lychee (password changed, sessions closed): log in again, once.
+      this.cookies.clear();
+      user = await this.call('Auth::user');
+    }
+    if (!isUser(user)) {
       // A token Lychee does not refuse but that is no user's (or no session).
       throw new LycheeError(ERROR_KINDS.AUTH, 'Not logged in');
     }
     return user;
   }
 
-  /** Photos, albums and users of the whole gallery (administrators only). */
-  stats() {
-    return this.call('Admin/Stats?force=1');
+  /**
+   * Photos, albums and users of the whole gallery (administrators only).
+   * `force` counts again instead of the figures Lychee keeps in cache.
+   */
+  stats(force = false) {
+    return this.call(force ? 'Admin/Stats?force=1' : 'Admin/Stats');
   }
 
   /** The albums at the root: own, shared and pinned ones, and the smart albums. */
@@ -238,7 +268,8 @@ export class LycheeClient {
   mediaUrl(raw) {
     let url;
     try {
-      url = new URL(String(raw));
+      // Absolute, or relative to the gallery.
+      url = new URL(String(raw), `${this.url}/`);
     } catch {
       return null;
     }
@@ -265,6 +296,9 @@ export class LycheeClient {
     return answer.body;
   }
 }
+
+const isUser = (user) =>
+  Boolean(user) && typeof user === 'object' && typeof user.username === 'string';
 
 function safeDecode(value) {
   try {

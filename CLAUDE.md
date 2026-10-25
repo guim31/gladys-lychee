@@ -274,3 +274,10 @@ long, et sur un « Sie »/« Ihr… » de politesse en allemand. Le store exige 
   `POST Photo` multipart avec `file`, `file_name`, `album_id`, `uuid_name` et `extension` **présents mais
   vides**, `chunk_number`, `total_chunks`, `file_last_modified_time` ; `QUEUE_CONNECTION=sync` évite un
   worker.
+- `Album::photos` d'un album : pages de **100**, triées selon l'album (souvent `taken_at`) : la page 1 ne
+  contient pas forcément les derniers ajouts. Toutes les pages sont lues (20 au plus), et seulement quand
+  `num_photos` change. Lychee **ignore un fichier déjà présent** (même empreinte) : 201 au téléversement,
+  aucune photo de plus (piège des tests réels).
+- Après un `Auth::login` refusé (401) ou limité (429), le client ne retente pas avant 15 ou 60 min avec les
+  mêmes identifiants (sinon les lectures épuisent les 10 essais par heure). Une session déconnectée côté
+  Lychee répond `Auth::user` = `null` (200) : reconnexion une fois.
