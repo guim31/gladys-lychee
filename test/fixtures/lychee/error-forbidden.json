@@ -1,0 +1,4 @@
+{
+  "message": "Insufficient privileges",
+  "exception": "UnauthorizedException"
+}

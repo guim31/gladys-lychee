@@ -1,0 +1,55 @@
+{
+  "data": [
+    {
+      "id": "21w8pDONX2UYITROfsR8RlxN",
+      "title": "Plage",
+      "description": null,
+      "thumb": {
+        "id": "o6ixmQkGdZSjH1A9cq7H7Bqh",
+        "type": "image/jpeg",
+        "thumb": "http://192.0.2.10/uploads/small/6f/7f/ec3e32cb3106eb0db26047210696.jpg",
+        "thumb2x": null,
+        "placeholder": "data:image/webp;base64,UklGRjIAAABXRUJQVlA4ICYAAACQAQCdASoQABAABABoJaACdLoAA5gA/tDK1sqsU/8bzea1YgAA"
+      },
+      "is_nsfw": false,
+      "is_pinned": false,
+      "is_public": false,
+      "is_link_required": false,
+      "is_password_required": false,
+      "is_locked": false,
+      "is_tag_album": false,
+      "is_person_album": false,
+      "has_subalbum": false,
+      "num_subalbums": 0,
+      "num_photos": 2,
+      "created_at": "Oct 2026",
+      "formatted_min_max": null,
+      "owner": "admin",
+      "rights": {
+        "can_edit": true,
+        "can_share": true,
+        "can_share_with_users": true,
+        "can_download": true,
+        "can_upload": true,
+        "can_move": true,
+        "can_move_content": true,
+        "can_merge": true,
+        "can_delete": true,
+        "can_transfer": true,
+        "can_access_original": true,
+        "can_pasword_protect": true,
+        "can_import_from_server": true,
+        "can_make_purchasable": false,
+        "can_view_album_people": false,
+        "can_trigger_scan": false,
+        "can_assign_face": false,
+        "can_batch_face_ops": false
+      },
+      "timeline": null
+    }
+  ],
+  "current_page": 1,
+  "last_page": 1,
+  "per_page": 30,
+  "total": 1
+}

@@ -32,15 +32,21 @@ pushing.
 
 ```
 index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
+src/app.js                        registers every SDK handler on the hub (also used by the tests)
+src/hub.js                        readings on a timer, states, scene events, scene action, widget data
+src/devices.js                    the gallery and album devices: features, names in four languages
+src/lychee/client.js              API v2 client: token, session + CSRF, error kinds
+src/lychee/http.js                the one network function (node:http/https), the test seam
+src/lychee/model.js               parsing of the Lychee answers (user, stats, albums, photos, dates)
+src/scenes.js                     scene action handler (manifest `scene_actions`)
+src/widgets.js                    the `latest_photos` widget and its thumbnails
+src/texts.js                      every text sent outside the widget, four languages
+src/store.js                      /data/lychee-state.json (upload cursor, album counts)
 src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...
-docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
-test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
+docs/{en,fr,de,es}.md             user documentation, re-hosted by Gladys (en and fr mandatory)
+test/                             node --test, fake Lychee (test/helpers) + the SDK's fake Gladys
+test/fixtures/lychee/             real answers of Lychee 7.12, anonymized
 .github/scripts/release.mjs       release helpers (manifest bump, changelog), tested in test/
 ```
 
@@ -70,8 +76,9 @@ test/                             node --test, against the SDK's fake Gladys (in
   `type: "provider"`: 5.1.0). `test/manifest.test.js` ties the manifest to the
   code (defaults, action, scene and widget handlers): change both sides
   together.
-- **User-facing text** is bilingual (English and French): action messages,
-  manifest texts, and `docs/en.md` / `docs/fr.md`, kept in sync.
+- **User-facing text** exists in English, French, German and Spanish: action
+  messages, manifest texts, feature names, widget texts, and `docs/en.md`,
+  `docs/fr.md`, `docs/de.md`, `docs/es.md`, kept in sync (`test/i18n.test.js`).
 - **Style.** Prettier formats, ESLint catches mistakes. Comments explain why,
   in English. Tests never touch the network.
 
@@ -233,3 +240,44 @@ long, et sur un « Sie »/« Ihr… » de politesse en allemand. Le store exige 
 - Docs `en`, `fr`, `de`, `es` avec les mêmes sections.
 - Chauffe, ouverture, sécurité : ne rien rendre pilotable « comme un thermostat » ou par un assistant
   vocal quand une erreur serait dangereuse (leçon d'OctoPrint).
+
+## Lychee (vérifié sur la 7.12, image `lycheeorg/lychee` + MariaDB 11, 25/10/2026)
+
+- **API** : `/api/v2/<Route>` en JSON (`Albums`, `Album::albums`, `Album::photos`, `Auth::user`…). **Toute**
+  requête doit porter `Content-Type: application/json`, GET compris (sinon 406).
+- **Jeton d'API** : `Authorization: Bearer <jeton>`, sans session ni CSRF. Créé depuis le profil
+  (`Profile::resetToken`, réservé aux comptes qui peuvent modifier leurs réglages : 403 pour un simple
+  utilisateur). Jeton refusé : HTTP 400 `Invalid token`.
+- **Session** : sans jeton, Laravel exige le jeton CSRF **même en lecture** (`isReading` est faux pour
+  `api/v2`) : lire une page web (`/gallery`) pour obtenir les cookies `XSRF-TOKEN` et `lychee_session`, puis
+  renvoyer `X-XSRF-TOKEN` (cookie décodé) à chaque requête. Session absente ou expirée : HTTP 419. Mot de
+  passe refusé : 401. **`Auth::login` est limité à 10 essais par heure, réussis compris** (429) : garder la
+  session, ne jamais se reconnecter à chaque lecture ; un échec de connexion vide les cookies (sinon la
+  session invitée passe pour connectée).
+- **Album « Récents »** (`album_id=recent`) : photos téléversées depuis `recent_age` jours (1 par défaut),
+  **triées selon le réglage de tri de Lychee, pas par date d'ajout** : tout lire (pages de 500) et trier par
+  `created_at`. Réservé aux administrateurs et aux comptes **autorisés à téléverser** (403 sinon), et
+  désactivable (`enable_recent`). Ses photos ont `album_id: "recent"` : l'album réel vient de
+  `Photo/<id>/albums`.
+- **Identifiants aléatoires** de 24 caractères (`[A-Za-z0-9_-]`), pour les photos comme pour les albums : le
+  curseur des nouvelles photos est la date de téléversement (`created_at`, ISO avec fuseau, un vrai instant)
+  plus les ids vus à cette seconde. Un album jamais vu après la première lecture compte depuis zéro.
+- **Clés d'image des widgets** : le cœur n'accepte que `^[a-z0-9][a-z0-9-]{0,63}$` (validé par
+  `validateWidgetContent`) : l'id de la photo passe en hexadécimal.
+- `num_photos` d'un album ne compte **que l'album lui-même**, pas ses sous-albums. `Admin/Stats`
+  (administrateurs) répond des chiffres **mis en cache** : `?force=1` recompte.
+- Les URL des réponses (`size_variants`) portent l'hôte d'`APP_URL` : les miniatures (`thumb`, 200 px
+  carrées, servies en statique sous `/uploads/`, sans contrôle d'accès par défaut) sont relues sur l'adresse
+  configurée (`client.mediaUrl`). Pages web : `/gallery/<album>/<photo>`.
+- Lychee 7 se met en route lentement (migrations, ~2 min au premier démarrage) ;
+  `php artisan lychee:create_user <nom> <mdp>` crée un compte (le premier est administrateur). Téléversement par l'API :
+  `POST Photo` multipart avec `file`, `file_name`, `album_id`, `uuid_name` et `extension` **présents mais
+  vides**, `chunk_number`, `total_chunks`, `file_last_modified_time` ; `QUEUE_CONNECTION=sync` évite un
+  worker.
+- `Album::photos` d'un album : pages de **100**, triées selon l'album (souvent `taken_at`) : la page 1 ne
+  contient pas forcément les derniers ajouts. Toutes les pages sont lues (20 au plus), et seulement quand
+  `num_photos` change. Lychee **ignore un fichier déjà présent** (même empreinte) : 201 au téléversement,
+  aucune photo de plus (piège des tests réels).
+- Après un `Auth::login` refusé (401) ou limité (429), le client ne retente pas avant 15 ou 60 min avec les
+  mêmes identifiants (sinon les lectures épuisent les 10 essais par heure). Une session déconnectée côté
+  Lychee répond `Auth::user` = `null` (200) : reconnexion une fois.
