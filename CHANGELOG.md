@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-25
+
 ### Added
 
 - First version of the Lychee integration: a **Lychee** device for the whole
@@ -27,3 +29,6 @@ the notes of the version's GitHub Release.
   followed album, with opt-in thumbnails served through Gladys.
 - Texts, feature names and documentation in English, French, German and
   Spanish.
+
+[Unreleased]: https://github.com/guim31/gladys-lychee/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/guim31/gladys-lychee/releases/tag/v1.0.0
